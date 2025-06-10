@@ -5,6 +5,8 @@
 
 > **Inspired by Stanford's CRFM research** on [AI-generated kernels](https://crfm.stanford.edu/2025/05/28/fast-kernels.html), Thought Kernel is an advanced optimization framework that leverages AI to systematically explore and optimize complex systems through branching exploration and iterative refinement.
 
+> Vibe coded by [Jason Head](https://github.com/jasonmhead) through Grok AI
+
 ## 🌟 Features
 
 - **Multi-LLM Support**: Works with OpenAI, Ollama, and OpenRouter for flexible model choices
@@ -15,6 +17,36 @@
 - **Performance-Driven**: Focus on maximizing your specified performance metrics
 - **Constraint-Aware**: Respects system constraints and requirements
 - **Human-in-the-Loop**: Seamlessly integrates human feedback when needed
+
+## 📂 Repository Structure
+
+```
+thought_kernel/
+├── README.md               # Project overview, setup, and usage instructions
+├── SYSTEM_README.md        # Detailed system architecture and configuration
+├── requirements.txt        # Python package dependencies
+├── config.yaml             # Configuration file for the optimizer
+├── LICENSE                 # License information (Unlicense)
+├── thought_kernel/         # Main package directory
+│   ├── __init__.py        # Package initialization
+│   ├── core/              # Core optimization logic
+│   ├── llm/               # Language model integrations
+│   ├── utils/             # Utility functions
+│   └── examples/          # Example scripts and notebooks
+├── tests/                  # Test suite
+└── docs/                   # Additional documentation
+```
+
+### Key Files:
+- **README.md**: Project overview, quick start guide, and basic usage
+- **SYSTEM_README.md**: In-depth system documentation and architecture
+- **requirements.txt**: Python package dependencies (install with `pip install -r requirements.txt`)
+- **config.yaml**: Main configuration file for model providers and optimization parameters
+- **thought_kernel/**: Main package containing all source code
+  - **core/**: Core optimization algorithms and state management
+  - **llm/**: Integrations with OpenAI, Ollama, and OpenRouter
+  - **utils/**: Helper functions and utilities
+  - **examples/**: Example scripts demonstrating usage
 
 ## 📚 Documentation
 
