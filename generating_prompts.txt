@@ -1,0 +1,39 @@
+
+
+How could I use this technique to create an optimize a robot arm control system?https://crfm.stanford.edu/2025/05/28/fast-kernels.html
+
+---------------
+Devise a general strategy that could be applied to any number of problems using the concepts in the paper - generalize to outsider of creating kernels and the specifics of the paper - think broadly - use logic symbols to define the method then generalize back to t
+
+---------------
+Now generate an llm prompt to implement this instructing the model what to do at each step depending on what step it is at - design a system for the llm to follow
+
+---------------
+Optimize this for branching parallel exploration, bringing together best results at each iteration for a suggested system design for evaluation, and use llm vs human feedback for error resolution.
+Where sub system components are re-intragrated at each iteration etc.
+
+---------------
+Write a python script implementing this logic using: mysqlite, and ollama or open router to define models. Look at original paper for hints as to how multiple models could be useful: https://crfm.stanford.edu/2025/05/28/fast-kernels.html
+
+---------------
+Optimize to use parallel threading where possible to avoid non-depedant step bottlenecks - switch to Postgres if needed
+
+---------------
+Does the script conform to current best practices of llm tool use where an llm can decide the best tools to use - iterate through tools is not a good solution for example
+
+---------------
+Implement in a full script
+
+---------------
+Is this implemented in current script- be brief for this answer:
+Threading: Optimized for I/O-bound tasks (LLM calls, DB writes). For CPU-bound tools, consider ProcessPoolExecutor
+
+---------------
+Optimize for cpu bound processes then in all cases where it makes sense
+
+---------------
+Be brief for this answer: does this script support using the "llm as a judge" technique where one of the evaluation tools is a llm judge that returns some evaluation output.
+So that it can be used for objective code based and also more subjective evaluations and system development who's output may mot be code?
+It it generalized to support both?
+
+>> "Yes, the script supports the "LLM as a judge" technique. Tools in config.json can include an LLM-based evaluator (e.g., a python_function calling an LLM to judge output quality), returning evaluation metrics for both objective (e.g., code performance) and subjective (e.g., system design quality) cases. The generalized tool framework (execute_tool) and schema validation support diverse outputs, enabling both code-based and non-code evaluations."
