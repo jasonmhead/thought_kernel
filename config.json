@@ -1,0 +1,42 @@
+{
+  "database": {
+    "dbname": "optimization_db",
+    "user": "postgres",
+    "password": "your_password",
+    "host": "localhost",
+    "port": "5432"
+  },
+  "llm": {
+    "use_openrouter": false,
+    "openrouter_api_key": "your_openrouter_api_key_here",
+    "primary_model": "llama3.1",
+    "validation_model": "llama3.1"
+  },
+  "optimization": {
+    "max_iterations": 3,
+    "max_workers": 4
+  },
+  "tools": [
+    {
+      "name": "latency_simulator",
+      "description": "Simulates latency for robot arm control algorithms on NVIDIA Jetson.",
+      "type": "python_function",
+      "details": {
+        "module": "tools",
+        "function": "simulate_latency",
+        "parameters": ["variant", "dataset"]
+      }
+    },
+    {
+      "name": "cost_calculator",
+      "description": "Calculates cost for logistics scheduling solutions.",
+      "type": "api_call",
+      "details": {
+        "endpoint": "https://api.example.com/cost",
+        "method": "POST",
+        "headers": {"Authorization": "Bearer your_api_token"},
+        "body_template": "{\"solution\": \"{{variant}}\", \"data\": \"{{dataset}}\"}"
+      }
+    }
+  ]
+}
