@@ -22,31 +22,26 @@
 
 ```
 thought_kernel/
-├── README.md               # Project overview, setup, and usage instructions
-├── SYSTEM_README.md        # Detailed system architecture and configuration
-├── requirements.txt        # Python package dependencies
-├── config.yaml             # Configuration file for the optimizer
-├── LICENSE                 # License information (Unlicense)
-├── thought_kernel/         # Main package directory
-│   ├── __init__.py        # Package initialization
-│   ├── core/              # Core optimization logic
-│   ├── llm/               # Language model integrations
-│   ├── utils/             # Utility functions
-│   └── examples/          # Example scripts and notebooks
-├── tests/                  # Test suite
-└── docs/                   # Additional documentation
+├── README.md                     # Project overview, setup, and usage instructions
+├── SYSTEM_README.md              # Detailed system architecture and configuration
+├── requirements.txt              # Python package dependencies
+├── config.json                   # Configuration file for the optimizer
+├── LICENSE                       # License information (Unlicense)
+├── thought_kernel.py             # Main optimization logic and entry point
+├── tools.py                      # Utility functions and helper methods
+├── Systematic_Optimization_prompt.txt  # initial prompt for systematic optimization
+└── generating_prompts.txt        # Additional prompt templates
 ```
 
 ### Key Files:
 - **README.md**: Project overview, quick start guide, and basic usage
 - **SYSTEM_README.md**: In-depth system documentation and architecture
 - **requirements.txt**: Python package dependencies (install with `pip install -r requirements.txt`)
-- **config.yaml**: Main configuration file for model providers and optimization parameters
-- **thought_kernel/**: Main package containing all source code
-  - **core/**: Core optimization algorithms and state management
-  - **llm/**: Integrations with OpenAI, Ollama, and OpenRouter
-  - **utils/**: Helper functions and utilities
-  - **examples/**: Example scripts demonstrating usage
+- **config.json**: Main configuration file for model providers and optimization parameters
+- **thought_kernel.py**: Main script containing the optimization logic
+- **tools.py**: Helper functions and utilities
+- **Systematic_Optimization_prompt.txt**: Core prompt used for systematic optimization
+- **generating_prompts.txt**: Additional prompt templates for various use cases
 
 ## 📚 Documentation
 
