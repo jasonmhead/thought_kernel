@@ -24,10 +24,12 @@ class ConfigManager:
             if key not in self.config:
                 raise ValueError(f"Missing {key} in config.json")
         for tool in self.config["tools"]:
-            if not all(k in tool for k in ["name", "description", "type", "details"]):
+            if not all(k in tool for k in ["name", "description", "type", "details", "schema"]):
                 raise ValueError(f"Invalid tool format: {tool}")
             if tool["type"] not in ["python_function", "api_call"]:
                 raise ValueError(f"Unsupported tool type: {tool['type']}")
+            if not isinstance(tool["schema"], dict) or "metric" not in tool["schema"] or "value" not in tool["schema"]:
+                raise ValueError(f"Invalid schema for tool {tool['name']}")
 
     def get_db_config(self) -> Dict:
         return self.config["database"]
@@ -107,9 +109,8 @@ class OptimizationSystem:
             with self.conn.cursor() as cursor:
                 timestamp = datetime.datetime.now().isoformat()
                 cursor.execute(
-                    "INSERT INTO error_log (step, error, resolution, timestamp)自主
-
-                    "timestamp": timestamp
+                    "INSERT INTO error_log (step, error, resolution, timestamp) VALUES (%s, %s, %s, %s)",
+                    (step, error, resolution, timestamp)
                 )
                 self.state["error_log"].append({"step": step, "error": error, "resolution": resolution, "timestamp": timestamp})
                 self.save_state()
@@ -144,37 +145,48 @@ class OptimizationSystem:
         self.log_error(step, error, resolution=resolution)
         return resolution
 
-    def execute_tool(self, tool: Dict, variant: Dict, dataset: List) -> Dict:
-        """Execute a tool for evaluation."""
-        try:
-            if tool["type"] == "python_function":
-                module = importlib.import_module(tool["details"]["module"])
-                func = getattr(module, tool["details"]["function"])
-                return func(variant, dataset)
-            elif tool["type"] == "api_call":
-                body = tool["details"]["body_template"].replace("{{variant}}", json.dumps(variant)).replace("{{dataset}}", json.dumps(dataset))
-                response = requests.request(
-                    method=tool["details"]["method"],
-                    url=tool["details"]["endpoint"],
-                    headers=tool["details"].get("headers", {}),
-                    data=body
-                )
-                response.raise_for_status()
-                return response.json()
-        except Exception as e:
-            resolution = self.resolve_error(5, f"Tool {tool['name']} failed: {str(e)}")
-            return json.loads(resolution) if resolution else {"metric": "unknown", "value": 0}
+    def execute_tool(self, tools: List[Dict], variant: Dict, dataset: List) -> List[Dict]:
+        """Execute multiple tools and validate outputs."""
+        results = []
+        for tool in tools:
+            try:
+                if tool["type"] == "python_function":
+                    module = importlib.import_module(tool["details"]["module"])
+                    func = getattr(module, tool["details"]["function"])
+                    result = func(variant, dataset)
+                elif tool["type"] == "api_call":
+                    body = tool["details"]["body_template"].replace("{{variant}}", json.dumps(variant)).replace("{{dataset}}", json.dumps(dataset))
+                    response = requests.request(
+                        method=tool["details"]["method"],
+                        url=tool["details"]["endpoint"],
+                        headers=tool["details"].get("headers", {}),
+                        data=body
+                    )
+                    response.raise_for_status()
+                    result = response.json()
+                
+                # Validate result schema
+                expected_schema = tool["schema"]
+                if not isinstance(result, dict) or not all(k in result for k in expected_schema):
+                    raise ValueError(f"Invalid tool output: {result}")
+                if not isinstance(result["value"], (int, float)):
+                    raise ValueError(f"Invalid metric value: {result['value']}")
+                results.append({"tool": tool["name"], "result": result})
+            except Exception as e:
+                resolution = self.resolve_error(5, f"Tool {tool['name']} failed: {str(e)}")
+                results.append({"tool": tool["name"], "result": json.loads(resolution) if resolution else {"metric": "unknown", "value": 0}})
+        return results
 
     def step_1_break_down(self, system_input: Dict[str, Any]):
         """Step 1: Break Down the Problem."""
         prompt = f"""
         System Description: {json.dumps(system_input)}
-        Decompose the system S into tasks T = {{T_1, T_2, ...}}, where each T_i is a subsystem critical to P.
+        Decompose the system S (e.g., robot arm control system) into tasks T = {{T_1, T_2, ...}}, where each T_i is a subsystem critical to P (e.g., minimize latency).
         For each T_i, provide:
         - Name and description
         - Role in S
         - Impact on P
-        Validate that tasks cover S and align with constraints C.
+        Validate that tasks cover S and align with constraints C (e.g., NVIDIA Jetson hardware).
         Return a JSON list of tasks.
         """
         try:
@@ -197,8 +209,8 @@ class OptimizationSystem:
             prompt = f"""
             Task: {json.dumps(task)}
             Constraints: {json.dumps(self.state['system_description'].get('constraints', {}))}
-            Generate a synthetic dataset D_i = {{(I_i, O_i)}} with 10–50 pairs (normal and edge cases).
-            Describe generation method and relevance.
+            Generate a synthetic dataset D_i = {{(I_i, O_i)}} with 10–50 pairs (normal and edge cases) for a robot arm control system.
+            Describe generation method and relevance (e.g., joint angles for kinematics).
             Return JSON: {{task_name, pairs, method}}.
             """
             try:
@@ -206,33 +218,17 @@ class OptimizationSystem:
                 return json.loads(response)
             except Exception as e:
                 resolution = self.resolve_error(2, f"Failed to generate dataset for {task['name']}: {str(e)}")
-                return json.loads(resolution) if resolutionრ
+                return json.loads(resolution) if resolution else {"task_name": task["name"], "pairs": [], "method": "failed"}
 
-                resolution = json.loads(resolution) if resolution else {"task_name": task["name"], "pairs": [], "method": "failed"}
-
-        with ThreadPoolExecutor(max_workers=self.config.get_optimization /
-
-System: I notice your message was cut off. It seems you were in the middle of providing code for `step_2_create_scenarios`. Would you like me to complete that function or address any specific part of the integration of LLM tool use, configuration logic, or parallel threading? Since you mentioned the original paper and a robot arm control system, I can also tailor the response to focus on that context if desired.
-
-To proceed efficiently, I’ll assume you want the completion of the `step_2_create_scenarios` function and the remaining steps, ensuring the script integrates **LLM tool use** for evaluation, uses a **configurable number of tools** from `config.json`, and maintains **parallel threading** and **PostgreSQL** for state management. I’ll complete the script, focusing on the robot arm optimization example, and include tool usage in **Step 5** for evaluating latency or other metrics relevant to a robot arm control system. I’ll also ensure the configuration logic is fully separated in `config.json`.
-
-Below is the continuation of the Python script, starting from the incomplete `step_2_create_scenarios` function, with explanations of how tool use, threading, and configuration are integrated.
-
----
-
-### Continuation of Python Script (`optimize.py`)
-
-```python
-System) -> Dict:
-            with ThreadPoolExecutor(max_workers=self.config.get_optimization_config()['max_workers']) as executor:
-                future_to_task = {executor.submit(generate_dataset, task): task for task in self.state["task_set"]}
-                dataset = []
-                for future in as_completed(future_to_task):
-                    dataset.append(future.result())
-            self.state["dataset"] = dataset
-            self.save_state()
-            print(f"Step 2 Summary:\n{tabulate([[d['task_name'], len(d['pairs']), d['method']] for d in dataset], headers=['Task', 'Pairs', 'Method'], tablefmt='grid')}")
-            self.current_step = 3
+        with ThreadPoolExecutor(max_workers=self.config.get_optimization_config()['max_workers']) as executor:
+            future_to_task = {executor.submit(generate_dataset, task): task for task in self.state["task_set"]}
+            dataset = []
+            for future in as_completed(future_to_task):
+                dataset.append(future.result())
+        self.state["dataset"] = dataset
+        self.save_state()
+        print(f"Step 2 Summary:\n{tabulate([[d['task_name'], len(d['pairs']), d['method']] for d in dataset], headers=['Task', 'Pairs', 'Method'], tablefmt='grid')}")
+        self.current_step = 3
 
     def step_3_reason_strategies(self):
         """Step 3: Reason Strategies (Parallel)."""
@@ -269,8 +265,8 @@ System) -> Dict:
             Task: {json.dumps(task)}
             Hypothesis: {hypothesis}
             Constraints: {json.dumps(self.state['system_description'].get('constraints', {}))}
-            Create a branch B_ij with 3–5 solution variants V_ijk (e.g., different algorithms or configurations for robot arm control).
-            Describe each V_ijk, its implementation of H_ij, and expected impact on P.
+            Create a branch B_ij with 3–5 solution variants V_ijk (e.g., algorithms for robot arm control).
+            Describe each V_ijk, its implementation, and expected impact on P.
             Return JSON: {{task_name, branch_id, hypothesis, variants: []}}.
             """
             try:
@@ -309,34 +305,48 @@ System) -> Dict:
             Dataset: {json.dumps(next((d for d in self.state['dataset'] if d['task_name'] == task_name), {}))}
             Metric: {self.state['system_description'].get('metric', 'unknown')}
             Constraints: {json.dumps(self.state['system_description'].get('constraints', {}))}
-            Available Tools: {json.dumps([{"name": t["name"], "description": t["description"]} for t in tools])}
-            Select the most appropriate tool to evaluate performance (e.g., latency for robot arm control).
-            Describe the evaluation process and assume correctness if outputs match expected.
-            Return JSON: {{task_name, branch_id, variant_id, tool_used, performance: {{metric, value}}}}.
+            Available Tools: {json.dumps([{"name": t["name"], "description": t["description"], "schema": t["schema"]} for t in tools])}
+            Your goal is to evaluate the performance of the variant for the given task and metric (e.g., latency for robot arm control).
+            1. Reason about which tool(s) are most appropriate based on the task, metric, and constraints. Do not iterate through all tools; select the best one(s) in a single decision.
+            2. If multiple tools are needed (e.g., latency and resource usage), specify their order and purpose.
+            3. If no tool is suitable, propose a fallback approach (e.g., manual evaluation or metric approximation).
+            4. Provide a reasoning trace explaining your tool choice(s).
+            5. Describe the evaluation process using the selected tool(s).
+            Return JSON:
+            {{
+              "task_name": "{task_name}",
+              "branch_id": "{branch_id}",
+              "variant_id": "{variant.get('id', 'unknown')}",
+              "tools_used": [{{"name": "tool_name", "purpose": "purpose"}}],
+              "reasoning": "why tools were chosen",
+              "evaluation_plan": "how tools will be used",
+              "performance": {{"metric": "metric_name", "value": 0}},
+              "tool_results": []
+            }}
             """
             try:
                 response = self.call_llm(prompt, model=self.config.get_llm_config()['validation_model'])
                 eval_plan = json.loads(response)
-                tool_name = eval_plan["tool_used"]
-                tool = next((t for t in tools if t["name"] == tool_name), None)
-                if not tool:
-                    raise ValueError(f"Tool {tool_name} not found")
-                result = self.execute_tool(tool, variant, next((d for d in self.state['dataset'] if d['task_name'] == task_name), []))
-                return {
-                    "task_name": task_name,
-                    "branch_id": branch_id,
-                    "variant_id": variant.get("id", "unknown"),
-                    "tool_used": tool_name,
-                    "performance": result
-                }
+                tools_to_use = [next((t for t in tools if t["name"] == tu["name"]), None) for tu in eval_plan["tools_used"]]
+                tools_to_use = [t for t in tools_to_use if t]
+                if not tools_to_use:
+                    raise ValueError(f"No valid tools selected: {eval_plan['tools_used']}")
+                tool_results = self.execute_tool(tools_to_use, variant, next((d for d in self.state['dataset'] if d['task_name'] == task_name), []))
+                eval_plan["tool_results"] = tool_results
+                # Use primary tool's result for performance (simplification)
+                eval_plan["performance"] = tool_results[0]["result"] if tool_results else {"metric": "unknown", "value": 0}
+                return eval_plan
             except Exception as e:
                 resolution = self.resolve_error(5, f"Evaluation failed for {task_name}: {str(e)}")
                 return json.loads(resolution) if resolution else {
                     "task_name": task_name,
                     "branch_id": branch_id,
                     "variant_id": variant.get("id", "unknown"),
-                    "tool_used": "none",
-                    "performance": {"metric": "unknown", "value": 0}
+                    "tools_used": [],
+                    "reasoning": "failed",
+                    "evaluation_plan": "none",
+                    "performance": {"metric": "unknown", "value": 0},
+                    "tool_results": []
                 }
 
         performance_results = []
@@ -345,7 +355,7 @@ System) -> Dict:
             for task_name, branches in self.state["solution_branches"].items():
                 for branch_id, branch in branches.items():
                     for v_idx, variant in enumerate(branch["variants"], 1):
-                        variant["id"] = f"v_{v_idx}"  # Ensure variant has an ID
+                        variant["id"] = f"v_{v_idx}"
                         future = executor.submit(evaluate_variant, task_name, branch_id, variant)
                         future_to_variant[future] = (task_name, branch_id, variant["id"])
             for future in as_completed(future_to_variant):
@@ -358,7 +368,7 @@ System) -> Dict:
                 [r for r in performance_results if r["task_name"] == task_name],
                 key=lambda x: x["performance"]["value"],
                 reverse=self.state["system_description"].get("metric", "").startswith("minimize")
-            )[:2]  # Top 2 per task
+            )[:2]
             best_solutions.extend(task_results)
 
         # Propose suggested system design
@@ -366,25 +376,25 @@ System) -> Dict:
         Best Solutions: {json.dumps(best_solutions)}
         Task Set: {json.dumps(self.state['task_set'])}
         Constraints: {json.dumps(self.state['system_description'].get('constraints', {}))}
-        Available Tools: {json.dumps([{"name": t["name"], "description": t["description"]} for t in self.config.get_tools()])}
-        Propose a suggested system design S' combining best solutions for a robot arm control system:
+        Available Tools: {json.dumps([{"name": t["name"], "description": t["description"], "schema": t["schema"]} for t in self.config.get_tools()])}
+        Propose a suggested system design S' for a robot arm control system combining best solutions:
         - Components: Tasks with selected variants
         - Interactions: Data flow between tasks
         - Evaluation plan: Select a tool and describe its use
-        Return JSON: {{components, interactions, evaluation: {{tool, method}}}}.
+        Return JSON: {{components, interactions, evaluation: {{tool, method, result: null}}}}.
         """
         try:
             response = self.call_llm(prompt, model=self.config.get_llm_config()['validation_model'])
             suggested_design = json.loads(response)
-            # Evaluate suggested design if tool specified
-            if suggested_design["evaluation"]["tool"]:
-                tool = next((t for t in self.config.get_tools() if t["name"] == suggested_design["evaluation"]["tool"]), None)
+            tool_name = suggested_design["evaluation"].get("tool", "")
+            if tool_name:
+                tool = next((t for t in self.config.get_tools() if t["name"] == tool_name), None)
                 if tool:
-                    design_result = self.execute_tool(tool, suggested_design["components"], self.state["dataset"])
-                    suggested_design["evaluation"]["result"] = design_result
+                    design_result = self.execute_tool([tool], suggested_design["components"], self.state["dataset"])
+                    suggested_design["evaluation"]["result"] = design_result[0]["result"] if design_result else {"metric": "unknown", "value": 0}
         except Exception as e:
             resolution = self.resolve_error(5, f"Failed to propose or evaluate design: {str(e)}")
-            suggested_design = json.loads(resolution) if resolution else {"components": [], "interactions": [], "evaluation": {"tool": "none", "method": "unknown"}}
+            suggested_design = json.loads(resolution) if resolution else {"components": [], "interactions": [], "evaluation": {"tool": "none", "method": "unknown", "result": null}}
 
         self.state["best_solutions"] = best_solutions
         self.state["suggested_design"] = suggested_design
@@ -401,7 +411,7 @@ System) -> Dict:
         Performance Results: {json.dumps(self.state['performance_results'])}
         Task Set: {json.dumps(self.state['task_set'])}
         Constraints: {json.dumps(self.state['system_description'].get('constraints', {}))}
-        Available Tools: {json.dumps([{"name": t["name"], "description": t["description"]} for t in self.config.get_tools()])}
+        Available Tools: {json.dumps([{"name": t["name"], "description": t["description"], "schema": t["schema"]} for t in self.config.get_tools()])}
         1. Analyze results for strengths/weaknesses.
         2. Update task_set with best solutions (re-integrate subsystems).
         3. Validate compatibility in suggested_design.
@@ -415,20 +425,18 @@ System) -> Dict:
             result = json.loads(response)
             self.state["task_set"] = result["updated_task_set"]
             if result["final_design"]:
-                # Evaluate final design
                 tool_name = result["final_design"].get("evaluation", {}).get("tool", "")
                 if tool_name:
                     tool = next((t for t in self.config.get_tools() if t["name"] == tool_name), None)
                     if tool:
-                        design_result = self.execute_tool(tool, result["final_design"]["components"], self.state["dataset"])
-                        result["final_design"]["evaluation"]["result"] = design_result
+                        design_result = self.execute_tool([tool], result["final_design"]["components"], self.state["dataset"])
+                        result["final_design"]["evaluation"]["result"] = design_result[0]["result"] if design_result else {"metric": "unknown", "value": 0}
                 self.state["suggested_design"] = result["final_design"]
                 self.save_state()
                 print(f"Step 6 Summary: Final Design\n{json.dumps(result['final_design'], indent=2)}")
                 self.current_step = 0
             else:
                 self.state["hypotheses"] = result["new_hypotheses"]
-                # Prune branches
                 for task_name, branches in self.state["solution_branches"].items():
                     for bid in list(branches.keys()):
                         if not any(v["variant_id"] in [b["variant_id"] for b in self.state["best_solutions"]] for v in branches[bid]["variants"]):

@@ -25,17 +25,24 @@
         "module": "tools",
         "function": "simulate_latency",
         "parameters": ["variant", "dataset"]
+      },
+      "schema": {
+        "metric": "string",
+        "value": "number"
       }
     },
     {
-      "name": "cost_calculator",
-      "description": "Calculates cost for logistics scheduling solutions.",
-      "type": "api_call",
+      "name": "resource_profiler",
+      "description": "Profiles resource usage (e.g., memory, CPU) for robot arm algorithms.",
+      "type": "python_function",
       "details": {
-        "endpoint": "https://api.example.com/cost",
-        "method": "POST",
-        "headers": {"Authorization": "Bearer your_api_token"},
-        "body_template": "{\"solution\": \"{{variant}}\", \"data\": \"{{dataset}}\"}"
+        "module": "tools",
+        "function": "profile_resources",
+        "parameters": ["variant", "dataset"]
+      },
+      "schema": {
+        "metric": "string",
+        "value": "number"
       }
     }
   ]
