@@ -1,9 +1,10 @@
 
 
-How could I use this technique to create an optimize a robot arm control system?https://crfm.stanford.edu/2025/05/28/fast-kernels.html
+How could I use this technique to create an optimize a robot arm control system?
+https://crfm.stanford.edu/2025/05/28/fast-kernels.html
 
 ---------------
-Devise a general strategy that could be applied to any number of problems using the concepts in the paper - generalize to outsider of creating kernels and the specifics of the paper - think broadly - use logic symbols to define the method then generalize back to t
+Devise a general strategy that could be applied to any number of problems using the concepts in the paper - generalize to outsider of creating kernels and the specifics of the paper - think broadly - use logic symbols to define the method then generalize back to text
 
 ---------------
 Now generate an llm prompt to implement this instructing the model what to do at each step depending on what step it is at - design a system for the llm to follow
