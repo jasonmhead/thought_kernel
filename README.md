@@ -18,6 +18,42 @@
 - **Constraint-Aware**: Respects system constraints and requirements
 - **Human-in-the-Loop**: Seamlessly integrates human feedback when needed
 
+## 🔄 Optimization Process
+
+Thought Kernel follows a systematic, six-step optimization process to break down complex systems and find optimal solutions:
+
+1. **System Decomposition**  
+   - Breaks down your system into core tasks and components
+   - Identifies critical paths and dependencies
+   - Validates task coverage against system constraints
+
+2. **Scenario Creation**  
+   - Generates diverse test cases and scenarios
+   - Covers both normal and edge cases
+   - Builds a representative dataset for evaluation
+
+3. **Strategy Formulation**  
+   - Proposes multiple optimization hypotheses per task
+   - Considers diverse approaches (algorithmic, architectural, etc.)
+   - Balances exploration and exploitation
+
+4. **Solution Exploration**  
+   - Creates solution variants for each hypothesis
+   - Evaluates trade-offs between different approaches
+   - Maintains multiple solution branches in parallel
+
+5. **Testing & Selection**  
+   - Executes automated tests using configured tools
+   - Measures performance against defined metrics
+   - Selects top-performing solutions
+
+6. **Iteration & Refinement**  
+   - Analyzes results and identifies improvement areas
+   - Refines solutions based on performance data
+   - Iterates until convergence or stopping criteria met
+
+This process is fully automated but allows for human intervention when needed, and all steps are tracked and can be reviewed for transparency.
+
 ## 📂 Repository Structure
 
 ```
