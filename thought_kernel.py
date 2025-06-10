@@ -2,13 +2,14 @@ import psycopg2
 import json
 import ollama
 import requests
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 from tabulate import tabulate
 import sys
 from typing import Dict, List, Any
 import datetime
 import threading
 import importlib
+from functools import partial
 
 class ConfigManager:
     """Manages configuration from config.json."""
@@ -18,7 +19,6 @@ class ConfigManager:
         self.validate_config()
 
     def validate_config(self):
-        """Validate configuration structure."""
         required = ["database", "llm", "optimization", "tools"]
         for key in required:
             if key not in self.config:
@@ -65,7 +65,6 @@ class OptimizationSystem:
         self.lock = threading.Lock()
 
     def create_tables(self):
-        """Initialize PostgreSQL tables."""
         with self.conn.cursor() as cursor:
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS state (
@@ -84,7 +83,6 @@ class OptimizationSystem:
             """)
 
     def save_state(self):
-        """Save state to PostgreSQL."""
         with self.lock:
             with self.conn.cursor() as cursor:
                 for key, value in self.state.items():
@@ -94,7 +92,6 @@ class OptimizationSystem:
                     )
 
     def load_state(self):
-        """Load state from PostgreSQL."""
         with self.lock:
             with self.conn.cursor() as cursor:
                 cursor.execute("SELECT key, value FROM state")
@@ -104,7 +101,6 @@ class OptimizationSystem:
         return self.state
 
     def log_error(self, step: int, error: str, resolution: str = None):
-        """Log errors to PostgreSQL."""
         with self.lock:
             with self.conn.cursor() as cursor:
                 timestamp = datetime.datetime.now().isoformat()
@@ -116,7 +112,6 @@ class OptimizationSystem:
                 self.save_state()
 
     def call_llm(self, prompt: str, model: str = None) -> str:
-        """Call LLM (Ollama or OpenRouter)."""
         llm_config = self.config.get_llm_config()
         model = model or llm_config["primary_model"]
         if llm_config["use_openrouter"]:
@@ -129,24 +124,43 @@ class OptimizationSystem:
             response = ollama.chat(model=model, messages=[{"role": "user", "content": prompt}])
             return response["message"]["content"]
 
-    def resolve_error(self, step: int, error: str) -> str:
-        """Attempt LLM resolution, escalate to human."""
+    def resolve_error(self, step: int, error: str, db_config: Dict) -> str:
         llm_config = self.config.get_llm_config()
         prompt = f"Error in Step {step}: {error}. Resolve by reasoning or adjusting the approach. Provide a solution or explain why it's unresolvable."
         for attempt in range(2):
             response = self.call_llm(prompt, model=llm_config["validation_model"])
             if "unresolvable" not in response.lower():
-                self.log_error(step, error, resolution=response)
+                with psycopg2.connect(**db_config) as conn:
+                    conn.set_session(autocommit=True)
+                    with conn.cursor() as cursor:
+                        timestamp = datetime.datetime.now().isoformat()
+                        cursor.execute(
+                            "INSERT INTO error_log (step, error, resolution, timestamp) VALUES (%s, %s, %s, %s)",
+                            (step, error, response, timestamp)
+                        )
                 return response
             prompt += f"\nAttempt {attempt+1} failed. Try a different approach."
-        self.log_error(step, error, resolution=None)
+        with psycopg2.connect(**db_config) as conn:
+            conn.set_session(autocommit=True)
+            with conn.cursor() as cursor:
+                timestamp = datetime.datetime.now().isoformat()
+                cursor.execute(
+                    "INSERT INTO error_log (step, error, resolution, timestamp) VALUES (%s, %s, %s, %s)",
+                    (step, error, None, timestamp)
+                )
         print(f"Error: {error}. Please provide guidance to resolve.")
         resolution = input("Your input: ")
-        self.log_error(step, error, resolution=resolution)
+        with psycopg2.connect(**db_config) as conn:
+            conn.set_session(autocommit=True)
+            with conn.cursor() as cursor:
+                timestamp = datetime.datetime.now().isoformat()
+                cursor.execute(
+                    "INSERT INTO error_log (step, error, resolution, timestamp) VALUES (%s, %s, %s, %s)",
+                    (step, error, resolution, timestamp)
+                )
         return resolution
 
     def execute_tool(self, tools: List[Dict], variant: Dict, dataset: List) -> List[Dict]:
-        """Execute multiple tools and validate outputs."""
         results = []
         for tool in tools:
             try:
@@ -165,7 +179,6 @@ class OptimizationSystem:
                     response.raise_for_status()
                     result = response.json()
                 
-                # Validate result schema
                 expected_schema = tool["schema"]
                 if not isinstance(result, dict) or not all(k in result for k in expected_schema):
                     raise ValueError(f"Invalid tool output: {result}")
@@ -173,12 +186,11 @@ class OptimizationSystem:
                     raise ValueError(f"Invalid metric value: {result['value']}")
                 results.append({"tool": tool["name"], "result": result})
             except Exception as e:
-                resolution = self.resolve_error(5, f"Tool {tool['name']} failed: {str(e)}")
+                resolution = self.resolve_error(5, f"Tool {tool['name']} failed: {str(e)}", self.config.get_db_config())
                 results.append({"tool": tool["name"], "result": json.loads(resolution) if resolution else {"metric": "unknown", "value": 0}})
         return results
 
     def step_1_break_down(self, system_input: Dict[str, Any]):
-        """Step 1: Break Down the Problem."""
         prompt = f"""
         System Description: {json.dumps(system_input)}
         Decompose the system S (e.g., robot arm control system) into tasks T = {{T_1, T_2, ...}}, where each T_i is a subsystem critical to P (e.g., minimize latency).
@@ -197,15 +209,14 @@ class OptimizationSystem:
             self.save_state()
             print(f"Step 1 Summary:\n{tabulate([[t['name'], t['description']] for t in tasks], headers=['Task', 'Description'], tablefmt='grid')}")
         except Exception as e:
-            resolution = self.resolve_error(1, str(e))
+            resolution = self.resolve_error(1, str(e), self.config.get_db_config())
             tasks = json.loads(resolution) if resolution else []
             self.state["task_set"] = tasks
             self.save_state()
         self.current_step = 2
 
     def step_2_create_scenarios(self):
-        """Step 2: Create Scenarios (Parallel)."""
-        def generate_dataset(task: Dict) -> Dict:
+        def generate_dataset(task: Dict, llm_config: Dict, db_config: Dict) -> Dict:
             prompt = f"""
             Task: {json.dumps(task)}
             Constraints: {json.dumps(self.state['system_description'].get('constraints', {}))}
@@ -214,25 +225,33 @@ class OptimizationSystem:
             Return JSON: {{task_name, pairs, method}}.
             """
             try:
-                response = self.call_llm(prompt)
-                return json.loads(response)
+                if llm_config["use_openrouter"]:
+                    headers = {"Authorization": f"Bearer {llm_config['openrouter_api_key']}", "Content-Type": "application/json"}
+                    payload = {"model": llm_config["primary_model"], "messages": [{"role": "user", "content": prompt}]}
+                    response = requests.post("https://openrouter.ai/api/v1/chat/completions", json=payload, headers=headers)
+                    response.raise_for_status()
+                    return json.loads(response.json()["choices"][0]["message"]["content"])
+                else:
+                    response = ollama.chat(model=llm_config["primary_model"], messages=[{"role": "user", "content": prompt}])
+                    return json.loads(response["message"]["content"])
             except Exception as e:
-                resolution = self.resolve_error(2, f"Failed to generate dataset for {task['name']}: {str(e)}")
+                resolution = self.resolve_error(2, f"Failed to generate dataset for {task['name']}: {str(e)}", db_config)
                 return json.loads(resolution) if resolution else {"task_name": task["name"], "pairs": [], "method": "failed"}
 
-        with ThreadPoolExecutor(max_workers=self.config.get_optimization_config()['max_workers']) as executor:
-            future_to_task = {executor.submit(generate_dataset, task): task for task in self.state["task_set"]}
+        with ProcessPoolExecutor(max_workers=self.config.get_optimization_config()['max_workers']) as executor:
+            generate_dataset_partial = partial(generate_dataset, llm_config=self.config.get_llm_config(), db_config=self.config.get_db_config())
+            future_to_task = {executor.submit(generate_dataset_partial, task): task for task in self.state["task_set"]}
             dataset = []
             for future in as_completed(future_to_task):
                 dataset.append(future.result())
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            executor.submit(self.save_state).result()  # Thread-safe DB write
         self.state["dataset"] = dataset
-        self.save_state()
         print(f"Step 2 Summary:\n{tabulate([[d['task_name'], len(d['pairs']), d['method']] for d in dataset], headers=['Task', 'Pairs', 'Method'], tablefmt='grid')}")
         self.current_step = 3
 
     def step_3_reason_strategies(self):
-        """Step 3: Reason Strategies (Parallel)."""
-        def generate_hypotheses(task: Dict) -> Dict:
+        def generate_hypotheses(task: Dict, llm_config: Dict, db_config: Dict) -> Dict:
             prompt = f"""
             Task: {json.dumps(task)}
             Dataset: {json.dumps(next((d for d in self.state['dataset'] if d['task_name'] == task['name']), {}))}
@@ -242,25 +261,33 @@ class OptimizationSystem:
             Return JSON: {{task_name, strategies: []}}.
             """
             try:
-                response = self.call_llm(prompt, model=self.config.get_llm_config()['primary_model'])
-                return json.loads(response)
+                if llm_config["use_openrouter"]:
+                    headers = {"Authorization": f"Bearer {llm_config['openrouter_api_key']}", "Content-Type": "application/json"}
+                    payload = {"model": llm_config["primary_model"], "messages": [{"role": "user", "content": prompt}]}
+                    response = requests.post("https://openrouter.ai/api/v1/chat/completions", json=payload, headers=headers)
+                    response.raise_for_status()
+                    return json.loads(response.json()["choices"][0]["message"]["content"])
+                else:
+                    response = ollama.chat(model=llm_config["primary_model"], messages=[{"role": "user", "content": prompt}])
+                    return json.loads(response["message"]["content"])
             except Exception as e:
-                resolution = self.resolve_error(3, f"Failed to generate hypotheses for {task['name']}: {str(e)}")
+                resolution = self.resolve_error(3, f"Failed to generate hypotheses for {task['name']}: {str(e)}", db_config)
                 return json.loads(resolution) if resolution else {"task_name": task["name"], "strategies": []}
 
-        with ThreadPoolExecutor(max_workers=self.config.get_optimization_config()['max_workers']) as executor:
-            future_to_task = {executor.submit(generate_hypotheses, task): task for task in self.state["task_set"]}
+        with ProcessPoolExecutor(max_workers=self.config.get_optimization_config()['max_workers']) as executor:
+            generate_hypotheses_partial = partial(generate_hypotheses, llm_config=self.config.get_llm_config(), db_config=self.config.get_db_config())
+            future_to_task = {executor.submit(generate_hypotheses_partial, task): task for task in self.state["task_set"]}
             hypotheses = []
             for future in as_completed(future_to_task):
                 hypotheses.append(future.result())
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            executor.submit(self.save_state).result()
         self.state["hypotheses"] = hypotheses
-        self.save_state()
         print(f"Step 3 Summary:\n{tabulate([[h['task_name'], len(h['strategies'])] for h in hypotheses], headers=['Task', 'Strategies'], tablefmt='grid')}")
         self.current_step = 4
 
     def step_4_explore_solutions(self):
-        """Step 4: Explore Solutions (Parallel)."""
-        def generate_branch(task: Dict, hypothesis: str, branch_id: str) -> Dict:
+        def generate_branch(task: Dict, hypothesis: str, branch_id: str, llm_config: Dict, db_config: Dict) -> Dict:
             prompt = f"""
             Task: {json.dumps(task)}
             Hypothesis: {hypothesis}
@@ -270,35 +297,43 @@ class OptimizationSystem:
             Return JSON: {{task_name, branch_id, hypothesis, variants: []}}.
             """
             try:
-                response = self.call_llm(prompt, model=self.config.get_llm_config()['primary_model'])
-                return json.loads(response)
+                if llm_config["use_openrouter"]:
+                    headers = {"Authorization": f"Bearer {llm_config['openrouter_api_key']}", "Content-Type": "application/json"}
+                    payload = {"model": llm_config["primary_model"], "messages": [{"role": "user", "content": prompt}]}
+                    response = requests.post("https://openrouter.ai/api/v1/chat/completions", json=payload, headers=headers)
+                    response.raise_for_status()
+                    return json.loads(response.json()["choices"][0]["message"]["content"])
+                else:
+                    response = ollama.chat(model=llm_config["primary_model"], messages=[{"role": "user", "content": prompt}])
+                    return json.loads(response["message"]["content"])
             except Exception as e:
-                resolution = self.resolve_error(4, f"Failed to generate branch {branch_id} for {task['name']}: {str(e)}")
+                resolution = self.resolve_error(4, f"Failed to generate branch {branch_id} for {task['name']}: {str(e)}", db_config)
                 return json.loads(resolution) if resolution else {"task_name": task["name"], "branch_id": branch_id, "hypothesis": hypothesis, "variants": []}
 
         branches = {}
-        with ThreadPoolExecutor(max_workers=self.config.get_optimization_config()['max_workers']) as executor:
+        with ProcessPoolExecutor(max_workers=self.config.get_optimization_config()['max_workers']) as executor:
             future_to_branch = {}
             for task in self.state["task_set"]:
                 task_name = task["name"]
                 branches[task_name] = {}
                 for h_idx, h in enumerate(next((h["strategies"] for h in self.state["hypotheses"] if h["task_name"] == task_name), []), 1):
                     branch_id = f"b_{h_idx}"
-                    future = executor.submit(generate_branch, task, h, branch_id)
+                    future = executor.submit(
+                        generate_branch, task, h, branch_id, self.config.get_llm_config(), self.config.get_db_config()
+                    )
                     future_to_branch[future] = (task_name, branch_id)
             for future in as_completed(future_to_branch):
                 task_name, branch_id = future_to_branch[future]
                 branches[task_name][branch_id] = future.result()
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            executor.submit(self.save_state).result()
         self.state["solution_branches"] = branches
-        self.save_state()
         table = [[task, bid, len(branch["variants"])] for task, branches in branches.items() for bid, branch in branches.items()]
         print(f"Step 4 Summary:\n{tabulate(table, headers=['Task', 'Branch', 'Variants'], tablefmt='grid')}")
         self.current_step = 5
 
     def step_5_test_select(self):
-        """Step 5: Test and Select Best Solutions (Parallel with Tool Use)."""
-        def evaluate_variant(task_name: str, branch_id: str, variant: Dict) -> Dict:
-            tools = self.config.get_tools()
+        def evaluate_variant(task_name: str, branch_id: str, variant: Dict, llm_config: Dict, db_config: Dict, tools: List[Dict]) -> Dict:
             prompt = f"""
             Variant: {json.dumps(variant)}
             Task: {task_name}
@@ -325,19 +360,30 @@ class OptimizationSystem:
             }}
             """
             try:
-                response = self.call_llm(prompt, model=self.config.get_llm_config()['validation_model'])
-                eval_plan = json.loads(response)
+                if llm_config["use_openrouter"]:
+                    headers = {"Authorization": f"Bearer {llm_config['openrouter_api_key']}", "Content-Type": "application/json"}
+                    payload = {"model": llm_config["validation_model"], "messages": [{"role": "user", "content": prompt}]}
+                    response = requests.post("https://openrouter.ai/api/v1/chat/completions", json=payload, headers=headers)
+                    response.raise_for_status()
+                    eval_plan = json.loads(response.json()["choices"][0]["message"]["content"])
+                else:
+                    response = ollama.chat(model=llm_config["validation_model"], messages=[{"role": "user", "content": prompt}])
+                    eval_plan = json.loads(response["message"]["content"])
+                
                 tools_to_use = [next((t for t in tools if t["name"] == tu["name"]), None) for tu in eval_plan["tools_used"]]
                 tools_to_use = [t for t in tools_to_use if t]
                 if not tools_to_use:
                     raise ValueError(f"No valid tools selected: {eval_plan['tools_used']}")
-                tool_results = self.execute_tool(tools_to_use, variant, next((d for d in self.state['dataset'] if d['task_name'] == task_name), []))
+                
+                # Execute tools in a separate process
+                with ProcessPoolExecutor(max_workers=1) as executor:
+                    tool_results = executor.submit(self.execute_tool, tools_to_use, variant, next((d for d in self.state['dataset'] if d['task_name'] == task_name), [])).result()
+                
                 eval_plan["tool_results"] = tool_results
-                # Use primary tool's result for performance (simplification)
                 eval_plan["performance"] = tool_results[0]["result"] if tool_results else {"metric": "unknown", "value": 0}
                 return eval_plan
             except Exception as e:
-                resolution = self.resolve_error(5, f"Evaluation failed for {task_name}: {str(e)}")
+                resolution = self.resolve_error(5, f"Evaluation failed for {task_name}: {str(e)}", db_config)
                 return json.loads(resolution) if resolution else {
                     "task_name": task_name,
                     "branch_id": branch_id,
@@ -356,12 +402,14 @@ class OptimizationSystem:
                 for branch_id, branch in branches.items():
                     for v_idx, variant in enumerate(branch["variants"], 1):
                         variant["id"] = f"v_{v_idx}"
-                        future = executor.submit(evaluate_variant, task_name, branch_id, variant)
+                        future = executor.submit(
+                            evaluate_variant, task_name, branch_id, variant, self.config.get_llm_config(),
+                            self.config.get_db_config(), self.config.get_tools()
+                        )
                         future_to_variant[future] = (task_name, branch_id, variant["id"])
             for future in as_completed(future_to_variant):
                 performance_results.append(future.result())
 
-        # Select best solutions
         best_solutions = []
         for task_name in {r["task_name"] for r in performance_results}:
             task_results = sorted(
@@ -371,7 +419,6 @@ class OptimizationSystem:
             )[:2]
             best_solutions.extend(task_results)
 
-        # Propose suggested system design
         prompt = f"""
         Best Solutions: {json.dumps(best_solutions)}
         Task Set: {json.dumps(self.state['task_set'])}
@@ -390,10 +437,11 @@ class OptimizationSystem:
             if tool_name:
                 tool = next((t for t in self.config.get_tools() if t["name"] == tool_name), None)
                 if tool:
-                    design_result = self.execute_tool([tool], suggested_design["components"], self.state["dataset"])
-                    suggested_design["evaluation"]["result"] = design_result[0]["result"] if design_result else {"metric": "unknown", "value": 0}
+                    with ProcessPoolExecutor(max_workers=1) as executor:
+                        design_result = executor.submit(self.execute_tool, [tool], suggested_design["components"], self.state["dataset"]).result()
+                        suggested_design["evaluation"]["result"] = design_result[0]["result"] if design_result else {"metric": "unknown", "value": 0}
         except Exception as e:
-            resolution = self.resolve_error(5, f"Failed to propose or evaluate design: {str(e)}")
+            resolution = self.resolve_error(5, f"Failed to propose or evaluate design: {str(e)}", self.config.get_db_config())
             suggested_design = json.loads(resolution) if resolution else {"components": [], "interactions": [], "evaluation": {"tool": "none", "method": "unknown", "result": null}}
 
         self.state["best_solutions"] = best_solutions
@@ -404,7 +452,6 @@ class OptimizationSystem:
         self.current_step = 6
 
     def step_6_iterate_refine(self):
-        """Step 6: Iterate and Refine (Sequential)."""
         prompt = f"""
         Best Solutions: {json.dumps(self.state['best_solutions'])}
         Suggested Design: {json.dumps(self.state['suggested_design'])}
@@ -429,8 +476,9 @@ class OptimizationSystem:
                 if tool_name:
                     tool = next((t for t in self.config.get_tools() if t["name"] == tool_name), None)
                     if tool:
-                        design_result = self.execute_tool([tool], result["final_design"]["components"], self.state["dataset"])
-                        result["final_design"]["evaluation"]["result"] = design_result[0]["result"] if design_result else {"metric": "unknown", "value": 0}
+                        with ProcessPoolExecutor(max_workers=1) as executor:
+                            design_result = executor.submit(self.execute_tool, [tool], result["final_design"]["components"], self.state["dataset"]).result()
+                            result["final_design"]["evaluation"]["result"] = design_result[0]["result"] if design_result else {"metric": "unknown", "value": 0}
                 self.state["suggested_design"] = result["final_design"]
                 self.save_state()
                 print(f"Step 6 Summary: Final Design\n{json.dumps(result['final_design'], indent=2)}")
@@ -445,7 +493,7 @@ class OptimizationSystem:
                 print(f"Step 6 Summary: Iteration {self.state['iteration_count']}, new hypotheses generated.")
                 self.current_step = 4
         except Exception as e:
-            resolution = self.resolve_error(6, f"Failed to refine or finalize: {str(e)}")
+            resolution = self.resolve_error(6, f"Failed to refine or finalize: {str(e)}", self.config.get_db_config())
             result = json.loads(resolution) if resolution else {"new_hypotheses": [], "updated_task_set": self.state["task_set"], "final_design": None}
             self.state.update({"hypotheses": result["new_hypotheses"], "task_set": result["updated_task_set"]})
             if result["final_design"]:
@@ -456,7 +504,6 @@ class OptimizationSystem:
             self.save_state()
 
     def run(self):
-        """Main loop."""
         system_input = input("Describe system S, metric P, constraints C (JSON or text): ")
         try:
             system_input = json.loads(system_input)
